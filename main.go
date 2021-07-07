@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"github.com/dim13/colormap"
 	"image"
 	"image/color"
 	"image/png"
@@ -15,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/dim13/colormap"
 
 	echo "github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -134,7 +135,7 @@ const blackAndWhite = false
 func heatToColor(v uint8) color.RGBA {
 	if blackAndWhite {
 		return color.RGBA{v, v, v, 255} // alpha 255 = opaque
-	}else {
+	} else {
 		return colormap.Magma[255-v].(color.RGBA)
 	}
 }
@@ -271,7 +272,7 @@ func traverse(ptr HybridNode, dir int, sparse SparseQuadtree) HybridNode {
 		ptr.quadrant = dir // the first traverse call establishes our overall quadrant
 		ptr.recursingIntoCorner = true
 	} else {
-		if ptr.quadrant+ dir != 3 {
+		if ptr.quadrant+dir != 3 {
 			// went off course, therefore recursing into the dense tree is no longer on the table
 			ptr.recursingIntoCorner = false
 			ptr.quadrant = -1 // prevent reinitializing recursion status
