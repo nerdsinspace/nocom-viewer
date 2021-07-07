@@ -19,7 +19,7 @@ var CONFIG = {
         0,
         0
       ],
-      "maxZoom": 10,
+      "maxZoom": 18,
       "name": "Nocoom",
       "renderView": "topdown",
       "rotations": [
@@ -55,8 +55,8 @@ var CONFIG = {
           0
         ]
       ],
-      "maxZoom": 10,
-      "tileWidth": 1
+      "maxZoom": 18,
+      "tileWidth": 16
     }
   }
 };

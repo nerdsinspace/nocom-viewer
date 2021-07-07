@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"github.com/dim13/colormap"
 	"image"
 	"image/color"
 	"image/png"
@@ -22,22 +23,45 @@ import (
 func main() {
 	hits := load()
 	log.Println("Loaded", len(hits), "hits")
-	denseSpawn := createDense(15)
-	width := denseSpawn.width
-	log.Println("Tree width", width)
-	offset := width / 2
+	denseSpawn := createDense(16)   // just a RAM tradeoff, might be wrong, optimal value could be plus or minus 1 or 2 from this idk golang is weird
+	sparseTotal := createSparse(23) // 2^(23-1) chunks is the width of the world (67 million blocks)
+	denseWidth := denseSpawn.width
+	sparseWidth := sparseTotal.width
+	log.Println("Dense width", denseWidth)
+	log.Println("Sparse width", sparseWidth)
+	denseOffset := denseWidth / 2
+	sparseOffset := sparseWidth / 2
 	totalHitsInDense := 0
+	totalHits := 0
 	for _, hit := range hits {
-		x := hit.x + offset
-		z := hit.z + offset
-		if x >= 0 && x < width && z >= 0 && z < width {
+		x := hit.x + denseOffset
+		z := hit.z + denseOffset
+		if x >= 0 && x < denseWidth && z >= 0 && z < denseWidth {
 			totalHitsInDense += hit.cnt
 			denseSpawn.walkAndIncrement(x, z, hit.cnt)
+		} else {
+			x = hit.x + sparseOffset
+			z = hit.z + sparseOffset
+			if x >= 0 && x < sparseWidth && z >= 0 && z < sparseWidth {
+				totalHits += hit.cnt
+				sparseTotal.walkAndIncrement(x, z, hit.cnt)
+			} else {
+				panic("hit too far")
+			}
 		}
 	}
-	log.Println("Total hits in dense tree", totalHitsInDense)
-	log.Println("Expect 65535 to the root:", denseSpawn.tree[0])
+	log.Println("Sparse quadtree backing array length is", len(sparseTotal.nodes), "and each one should take up 20 bytes of RAM")
+	log.Println("Dense quadtree backing array length is", len(denseSpawn.tree), "and each one should take up 4 bytes of RAM")
+	if totalHitsInDense != int(denseSpawn.tree[0]) {
+		panic("dense overflow")
+	}
+	if totalHits != int(sparseTotal.nodes[sparseTotal.root].hits) {
+		panic("sparse overflow")
+	}
+	server(denseSpawn, sparseTotal)
+}
 
+func server(denseSpawn DenseQuadtree, sparseTotal SparseQuadtree) {
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -48,22 +72,26 @@ func main() {
 					p1 := parts[1]
 					if path, ok := parsePath(p1); ok {
 						log.Println("Need to do path", path)
-						data := render(path, denseSpawn, 9)
-						return c.Blob(http.StatusOK, "image/png", data)
+						data := render(path, denseSpawn, sparseTotal, 9) // 256 because it's -1
+						c.Response().Header().Set("Content-Type", "image/png")
+						c.Response().WriteHeader(http.StatusOK)
+						return png.Encode(c.Response(), data)
 					}
-
-					// /nocom/topdown/tl/3/2.png
-					//return c.Redirect(http.StatusTemporaryRedirect, "https://cloud.daporkchop.net/minecraft/2b2t/map/2018/100k/topdown/tl"+p1)
 				}
 			}
 			return next(c)
 		}
 	})
-
 	e.Static("/", "static")
 	e.Logger.Fatal(e.Start(":4679"))
 }
 
+// input: 1/2/3.png
+// output: [1, 2, 3], true
+// input: base.png
+// output: [], true
+// input: blah blah invalid
+// output: whatever, false
 func parsePath(path string) ([]int, bool) {
 	if !strings.HasSuffix(path, ".png") {
 		return nil, false
@@ -84,19 +112,11 @@ func parsePath(path string) ([]int, bool) {
 	return ret, true
 }
 
-var grayscale = make([]color.RGBA, 256)
-
-func init() {
-	for i := 0; i < 256; i++ {
-		grayscale[i] = color.RGBA{uint8(i), uint8(i), uint8(i), 255}
-	}
-}
-
-func hitCntToColor(cnt Hits, scalePow int) color.RGBA {
+func hitCntToHeat(cnt Hits, scalePow int64) uint8 {
 	if cnt == 0 {
-		return grayscale[255]
+		return 255
 	}
-	val := math.Log(float64(cnt) / float64(scalePow))
+	val := math.Log(float64(cnt) / float64(scalePow)) // this is log base e, NOT log base 10, NOT log base 2
 	if val < 0 {
 		val = 0
 	}
@@ -105,19 +125,23 @@ func hitCntToColor(cnt Hits, scalePow int) color.RGBA {
 	if val > 255 {
 		val = 255
 	}
-	return grayscale[255-int(val)]
+	gray := uint8(255 - int(val))
+	return gray
 }
 
-func render(path []int, quadtree DenseQuadtree, levelSz int) []byte {
-	// empty path = entire tree
-	// levelSz = 1 means 1x1
-	// levelSz = 2 means 2x2
-	// levelSz = 3 means 4x4
-	/*if len(path) + levelSz > quadtree.levels {
-		panic("what")
-	}*/
-	tooBigBy := len(path) + levelSz - quadtree.levels
-	log.Println("Raw tbb", tooBigBy)
+const blackAndWhite = false
+
+func heatToColor(v uint8) color.RGBA {
+	if blackAndWhite {
+		return color.RGBA{v, v, v, 255} // alpha 255 = opaque
+	}else {
+		return colormap.Magma[255-v].(color.RGBA)
+	}
+}
+
+func render(path []int, dense DenseQuadtree, sparse SparseQuadtree, levelSz int) *image.RGBA {
+	tooBigBy := len(path) + levelSz - sparse.levels
+	//log.Println("Raw tbb", tooBigBy)
 	extraNodeLevelsPerPixel := 0
 	if tooBigBy < 0 {
 		extraNodeLevelsPerPixel = -tooBigBy
@@ -127,32 +151,33 @@ func render(path []int, quadtree DenseQuadtree, levelSz int) []byte {
 	for i := 1; i < levelSz; i++ {
 		imgSz *= 2
 	}
-	scaleAmt := 1
+	var scaleAmt int64 = 1
 	for i := 0; i < extraNodeLevelsPerPixel; i++ {
 		scaleAmt *= 4
 	}
 	log.Println("Scale is", scaleAmt)
-	locationToDraw := 0
+	img := image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{imgSz, imgSz}})
+
+	locationToDraw := HybridNode{}
 	for _, item := range path {
-		item -= 1                                                  // leaflet uses 1234 but we prefer 0123
-		locationToDraw = indDownOne(locationToDraw, item, item>>1) // for this reason :)
+		item -= 1 // leaflet uses 1234 but we prefer 0123
+		locationToDraw = traverse(locationToDraw, item, sparse)
 	}
-	ret := image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{imgSz, imgSz}})
+
 	for y := 0; y < imgSz; y++ {
 		for x := 0; x < imgSz; x++ {
 			pos := locationToDraw
 			for i := levelSz - 2; i >= tooBigBy; i-- {
-				pos = indDownOne(pos, x>>i, y>>i)
+				pos = traverse(pos, ((x>>i)&1)+((y>>i)&1)<<1, sparse)
 			}
-			ret.SetRGBA(x, y, hitCntToColor(quadtree.tree[pos], scaleAmt))
+			c := uint8(255)
+			if !pos.miss {
+				c = hitCntToHeat(getHit(pos, sparse, dense), scaleAmt)
+			}
+			img.SetRGBA(x, y, heatToColor(c))
 		}
 	}
-	var buf bytes.Buffer
-	err := png.Encode(&buf, ret)
-	if err != nil {
-		panic(err)
-	}
-	return buf.Bytes()
+	return img
 }
 
 type HitData struct {
@@ -163,23 +188,112 @@ type HitData struct {
 
 type NodePtr int32
 type QuadtreeNode struct {
-	NN   NodePtr
-	NP   NodePtr
-	PN   NodePtr
-	PP   NodePtr
-	hits Hits
+	Children [4]NodePtr
+	hits     Hits
 }
 
-type Quadtree struct {
-	root  NodePtr
-	nodes []QuadtreeNode
+type SparseQuadtree struct {
+	root   NodePtr
+	nodes  []QuadtreeNode
+	levels int
+	width  int
 }
 
-/*type Hits uint16
-const HITS_MAX int = 65535*/
+func createSparse(levels int) SparseQuadtree {
+	if levels < 1 {
+		panic("no")
+	}
+	width := 1
+	for i := 1; i < levels; i++ {
+		width *= 2
+	}
+	ret := SparseQuadtree{levels: levels, nodes: make([]QuadtreeNode, 0), width: width}
+	ret.root = ret.alloc()
+	return ret
+}
+
+func (tree *SparseQuadtree) walkAndIncrement(x int, y int, cnt int) {
+	node := &tree.nodes[tree.root]
+	node.applyHits(cnt)
+	for i := tree.levels - 2; i >= 0; i-- {
+		ind := ((x >> i) & 1) + ((y>>i)&1)<<1
+		if node.Children[ind] == -1 {
+			node.Children[ind] = tree.alloc()
+		}
+		node = &tree.nodes[node.Children[ind]]
+		node.applyHits(cnt)
+	}
+}
+
+func (node *QuadtreeNode) applyHits(cnt int) {
+	orig := node.hits
+	sum := orig + Hits(cnt)
+	if sum < orig {
+		panic("overflow")
+	}
+	node.hits = sum
+}
+
+func (tree *SparseQuadtree) alloc() NodePtr {
+	ret := NodePtr(len(tree.nodes))
+	tree.nodes = append(tree.nodes, QuadtreeNode{Children: [4]NodePtr{-1, -1, -1, -1}})
+	return ret
+}
+
+type HybridNode struct {
+	miss                bool
+	inDense             bool
+	index               int
+	quadrant            int
+	recursingIntoCorner bool
+}
+
+func getHit(ptr HybridNode, sparse SparseQuadtree, dense DenseQuadtree) Hits {
+	if ptr.miss {
+		panic("no")
+	}
+	if ptr.inDense {
+		return dense.tree[ptr.index]
+	} else {
+		return sparse.nodes[ptr.index].hits
+	}
+}
+
+func traverse(ptr HybridNode, dir int, sparse SparseQuadtree) HybridNode {
+	if ptr.miss {
+		return ptr
+	}
+	if ptr.inDense {
+		ptr.index = ptr.index<<2 + 1 + dir
+		return ptr
+	}
+	if ptr.quadrant == 0 && !ptr.recursingIntoCorner {
+		ptr.quadrant = dir // the first traverse call establishes our overall quadrant
+		ptr.recursingIntoCorner = true
+	} else {
+		if ptr.quadrant+ dir != 3 {
+			// went off course, therefore recursing into the dense tree is no longer on the table
+			ptr.recursingIntoCorner = false
+			ptr.quadrant = -1 // prevent reinitializing recursion status
+		}
+	}
+	child := sparse.nodes[ptr.index].Children[dir]
+	if child == -1 {
+		// either miss, or transition to dense quad tree near spawn!
+		if ptr.recursingIntoCorner {
+			// transition to dense quad tree
+			ptr.index = 1 + 3 - dir // add 1 to go from root to top level subnode (to select quadrant), and subtract from 3 to go into opposite quadrant because this is root
+			ptr.inDense = true
+			return ptr
+		}
+		ptr.miss = true
+		return ptr
+	}
+	ptr.index = int(child)
+	return ptr
+}
+
 type Hits uint32
-
-const HITS_MAX int = 4294967295
 
 type DenseQuadtree struct {
 	tree   []Hits
@@ -203,44 +317,21 @@ func createDense(levels int) DenseQuadtree {
 }
 
 func (tree *DenseQuadtree) walkAndIncrement(x int, y int, cnt int) {
-	/*if x < 0 || y < 0 || y >= tree.width || x >= tree.width {
-		panic("what")
-	}*/
 	ind := 0
 	tree.applyHits(ind, cnt)
-	//tree.applyAtLeastOne(ind)
 	for i := tree.levels - 2; i >= 0; i-- {
-		ind = indDownOne(ind, x>>i, y>>i)
+		ind = ind<<2 + 1 + ((x >> i) & 1) + ((y>>i)&1)<<1
 		tree.applyHits(ind, cnt)
-		//tree.applyAtLeastOne(ind)
-	}
-	//tree.applyHits(ind, cnt-1)
-}
-func (tree *DenseQuadtree) applyAtLeastOne(ind int) {
-	if tree.tree[ind] == 0 {
-		tree.tree[ind]++
 	}
 }
 
 func (tree *DenseQuadtree) applyHits(ind int, cnt int) {
-	var sum int
-	sum += int(tree.tree[ind])
-	sum += cnt
-	if sum > HITS_MAX {
-		sum = HITS_MAX
+	orig := tree.tree[ind]
+	sum := orig + Hits(cnt)
+	if sum < orig {
+		panic("overflow")
 	}
-	tree.tree[ind] = Hits(sum)
-	/*if int(tree.tree[ind]) != sum {
-		panic("what")
-	}*/
-}
-
-func indUpOne(ind int) int {
-	return (ind - 1) >> 2
-}
-
-func indDownOne(ind int, x int, y int) int {
-	return ind<<2 + 1 + (x & 1) + (y&1)<<1
+	tree.tree[ind] = sum
 }
 
 func load() []HitData {
@@ -250,6 +341,8 @@ func load() []HitData {
 	}
 	defer file.Close()
 
+	// some golang trickery to multithread the parsing of the csv lol
+	// theres nothing actually fancy here, it's just reading the csv and returning []HitData
 	chunks := make(chan io.Reader)
 	hitsCh := make(chan []HitData)
 	var wg sync.WaitGroup
@@ -278,9 +371,6 @@ func load() []HitData {
 						panic(err)
 					}
 					result = append(result, HitData{x, z, cnt})
-					/*if len(result)%100000 == 0 {
-						log.Println(len(result))
-					}*/
 				}
 				if err := scanner.Err(); err != nil {
 					panic(err)
@@ -294,18 +384,9 @@ func load() []HitData {
 		close(hitsCh)
 	}()
 	go loadFileIntoChunks(chunks, file)
-	/*go func(){
-		defer close(chunks)
-		buf, err := ioutil.ReadAll(file)
-		if err != nil {
-			panic(err)
-		}
-		chunks<-bytes.NewBuffer(buf)
-	}()*/
 	allHits := make([]HitData, 0, 200000000)
 	for hits := range hitsCh {
 		allHits = append(allHits, hits...)
-		//log.Println("uwu",len(allHits))
 	}
 	return allHits
 }
@@ -321,7 +402,7 @@ func loadFileIntoChunks(chunks chan io.Reader, file *os.File) {
 		if err != nil && err != io.EOF {
 			panic(err)
 		}
-		if n == 0 {
+		if n == 0 && err == io.EOF {
 			return
 		}
 		buf = buf[:n]
