@@ -85,6 +85,7 @@ func parsePath(path string) ([]int, bool) {
 }
 
 var grayscale = make([]color.RGBA, 256)
+
 func init() {
 	for i := 0; i < 256; i++ {
 		grayscale[i] = color.RGBA{uint8(i), uint8(i), uint8(i), 255}
@@ -123,17 +124,17 @@ func render(path []int, quadtree DenseQuadtree, levelSz int) []byte {
 		tooBigBy = 0 // 1 node is SMALLER THAN one pixel
 	} // if equal, one node EQUALS one pixel
 	imgSz := 1
-	for i:=1; i<levelSz; i++ {
-		imgSz*=2
+	for i := 1; i < levelSz; i++ {
+		imgSz *= 2
 	}
 	scaleAmt := 1
-	for i :=0; i<extraNodeLevelsPerPixel; i++ {
-		scaleAmt*=4
+	for i := 0; i < extraNodeLevelsPerPixel; i++ {
+		scaleAmt *= 4
 	}
 	log.Println("Scale is", scaleAmt)
 	locationToDraw := 0
 	for _, item := range path {
-		item -= 1 // leaflet uses 1234 but we prefer 0123
+		item -= 1                                                  // leaflet uses 1234 but we prefer 0123
 		locationToDraw = indDownOne(locationToDraw, item, item>>1) // for this reason :)
 	}
 	ret := image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{imgSz, imgSz}})
@@ -154,15 +155,11 @@ func render(path []int, quadtree DenseQuadtree, levelSz int) []byte {
 	return buf.Bytes()
 }
 
-
-
-
 type HitData struct {
 	x   int
 	z   int
 	cnt int
 }
-
 
 type NodePtr int32
 type QuadtreeNode struct {
@@ -181,6 +178,7 @@ type Quadtree struct {
 /*type Hits uint16
 const HITS_MAX int = 65535*/
 type Hits uint32
+
 const HITS_MAX int = 4294967295
 
 type DenseQuadtree struct {
@@ -219,7 +217,7 @@ func (tree *DenseQuadtree) walkAndIncrement(x int, y int, cnt int) {
 	//tree.applyHits(ind, cnt-1)
 }
 func (tree *DenseQuadtree) applyAtLeastOne(ind int) {
-	if tree.tree[ind]==0 {
+	if tree.tree[ind] == 0 {
 		tree.tree[ind]++
 	}
 }
@@ -244,7 +242,6 @@ func indUpOne(ind int) int {
 func indDownOne(ind int, x int, y int) int {
 	return ind<<2 + 1 + (x & 1) + (y&1)<<1
 }
-
 
 func load() []HitData {
 	file, err := os.Open("/Users/leijurv/Downloads/heatmap_full.csv")
