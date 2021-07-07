@@ -23,7 +23,7 @@ import (
 func main() {
 	hits := load()
 	log.Println("Loaded", len(hits), "hits")
-	denseSpawn := createDense(16)   // just a RAM tradeoff, might be wrong, optimal value could be plus or minus 1 or 2 from this idk golang is weird
+	denseSpawn := createDense(15)   // just a RAM tradeoff, might be wrong, optimal value could be plus or minus 1 or 2 from this idk golang is weird
 	sparseTotal := createSparse(23) // 2^(23-1) chunks is the width of the world (67 million blocks)
 	denseWidth := denseSpawn.width
 	sparseWidth := sparseTotal.width
