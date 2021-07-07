@@ -22,8 +22,15 @@ import (
 )
 
 func main() {
-	hits := load()
+	nether := makeTrees("/Users/leijurv/Downloads/heatmap_nether.csv")
+	overworld := makeTrees("/Users/leijurv/Downloads/heatmap_full.csv")
+	server(overworld, nether)
+}
+
+func makeTrees(path string) Trees {
+	hits := load(path)
 	log.Println("Loaded", len(hits), "hits")
+	// TODO denseSpawn height optimal value will be different in nether vs overworld
 	denseSpawn := createDense(15)   // just a RAM tradeoff, might be wrong, optimal value could be plus or minus 1 or 2 from this idk golang is weird
 	sparseTotal := createSparse(23) // 2^(23-1) chunks is the width of the world (67 million blocks)
 	denseWidth := denseSpawn.width
@@ -59,10 +66,10 @@ func main() {
 	if totalHits != int(sparseTotal.nodes[sparseTotal.root].hits) {
 		panic("sparse overflow")
 	}
-	server(denseSpawn, sparseTotal)
+	return Trees{denseSpawn, sparseTotal}
 }
 
-func server(denseSpawn DenseQuadtree, sparseTotal SparseQuadtree) {
+func server(overworld Trees, nether Trees) {
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -73,7 +80,12 @@ func server(denseSpawn DenseQuadtree, sparseTotal SparseQuadtree) {
 					p1 := parts[1]
 					if path, ok := parsePath(p1); ok {
 						log.Println("Need to do path", path)
-						data := render(path, denseSpawn, sparseTotal, 9) // 256 because it's -1
+						tree := overworld
+						if strings.Contains(c.Request().URL.Path, "nether") {
+							tree = nether
+						}
+						blackAndWhite := strings.Contains(c.Request().URL.Path, "blackwhite")
+						data := render(path, tree, 9, blackAndWhite) // 256 because it's -1
 						c.Response().Header().Set("Content-Type", "image/png")
 						c.Response().WriteHeader(http.StatusOK)
 						return png.Encode(c.Response(), data)
@@ -85,6 +97,11 @@ func server(denseSpawn DenseQuadtree, sparseTotal SparseQuadtree) {
 	})
 	e.Static("/", "static")
 	e.Logger.Fatal(e.Start(":4679"))
+}
+
+type Trees struct {
+	dense DenseQuadtree
+	sparse SparseQuadtree
 }
 
 // input: 1/2/3.png
@@ -130,9 +147,7 @@ func hitCntToHeat(cnt Hits, scalePow int64) uint8 {
 	return gray
 }
 
-const blackAndWhite = false
-
-func heatToColor(v uint8) color.RGBA {
+func heatToColor(v uint8, blackAndWhite bool) color.RGBA {
 	if blackAndWhite {
 		return color.RGBA{v, v, v, 255} // alpha 255 = opaque
 	} else {
@@ -140,7 +155,9 @@ func heatToColor(v uint8) color.RGBA {
 	}
 }
 
-func render(path []int, dense DenseQuadtree, sparse SparseQuadtree, levelSz int) *image.RGBA {
+func render(path []int, trees Trees, levelSz int, blackAndWhite bool) *image.RGBA {
+	dense :=trees.dense
+	sparse := trees.sparse
 	tooBigBy := len(path) + levelSz - sparse.levels
 	//log.Println("Raw tbb", tooBigBy)
 	extraNodeLevelsPerPixel := 0
@@ -175,7 +192,7 @@ func render(path []int, dense DenseQuadtree, sparse SparseQuadtree, levelSz int)
 			if !pos.miss {
 				c = hitCntToHeat(getHit(pos, sparse, dense), scaleAmt)
 			}
-			img.SetRGBA(x, y, heatToColor(c))
+			img.SetRGBA(x, y, heatToColor(c, blackAndWhite))
 		}
 	}
 	return img
@@ -335,8 +352,8 @@ func (tree *DenseQuadtree) applyHits(ind int, cnt int) {
 	tree.tree[ind] = sum
 }
 
-func load() []HitData {
-	file, err := os.Open("/Users/leijurv/Downloads/heatmap_full.csv")
+func load(path string) []HitData {
+	file, err := os.Open(path)
 	if err != nil {
 		log.Fatal(err)
 	}
