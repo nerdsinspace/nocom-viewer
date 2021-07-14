@@ -22,16 +22,16 @@ import (
 )
 
 func main() {
-	nether := makeTrees("/Users/leijurv/Downloads/heatmap_nether.csv")
-	overworld := makeTrees("/Users/leijurv/Downloads/heatmap_full.csv")
+	nether := makeTrees("/Users/leijurv/Downloads/heatmap_nether.csv", 250000/16/8, 12)
+	overworld := makeTrees("/Users/leijurv/Downloads/heatmap_full.csv", 250000/16, 15)
 	server(overworld, nether)
 }
 
-func makeTrees(path string) Trees {
+func makeTrees(path string, limit int64, denseSize int) Trees {
 	hits := load(path)
 	log.Println("Loaded", len(hits), "hits")
 	// TODO denseSpawn height optimal value will be different in nether vs overworld
-	denseSpawn := createDense(15)   // just a RAM tradeoff, might be wrong, optimal value could be plus or minus 1 or 2 from this idk golang is weird
+	denseSpawn := createDense(denseSize)   // just a RAM tradeoff, might be wrong, optimal value could be plus or minus 1 or 2 from this idk golang is weird
 	sparseTotal := createSparse(23) // 2^(23-1) chunks is the width of the world (67 million blocks)
 	denseWidth := denseSpawn.width
 	sparseWidth := sparseTotal.width
@@ -42,6 +42,10 @@ func makeTrees(path string) Trees {
 	totalHitsInDense := 0
 	totalHits := 0
 	for _, hit := range hits {
+		//if hit.x < -limit || hit.x >= limit || hit.z < -limit || hit.z >= limit {
+		if hit.distSq() > limit*limit {
+			continue
+		}
 		x := hit.x + denseOffset
 		z := hit.z + denseOffset
 		if x >= 0 && x < denseWidth && z >= 0 && z < denseWidth {
@@ -196,6 +200,10 @@ func render(path []int, trees Trees, levelSz int, blackAndWhite bool) *image.RGB
 		}
 	}
 	return img
+}
+
+func (data HitData) distSq() int64 {
+	return int64(data.x)*int64(data.x)+int64(data.z)*int64(data.z)
 }
 
 type HitData struct {
