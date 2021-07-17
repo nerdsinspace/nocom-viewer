@@ -266,6 +266,46 @@ func (tree *SparseQuadtree) alloc() NodePtr {
 	return ret
 }
 
+type PackedSparseQuadtreeEntry struct {
+	cumulativeQuantityOfDescendents int
+	grayscale uint8 // computed as above. no need to store 4 bytes for hit count anymore, we can just compute color and store that!
+	childrenThatExist uint8 // bitmask. 00 01 10 11. least significant bit is 00, most significant bit is 11.
+}
+
+type PackedSparseQuadtree []PackedSparseQuadtreeEntry
+
+func createPackedTree(tree *SparseQuadtree) PackedSparseQuadtree {
+	s := make(PackedSparseQuadtree, 0)
+	var scalePow int64 = 1
+	for i := 1; i < tree.levels; i++ {
+		scalePow *= 4
+	}
+	pack(tree, 0, &s, scalePow)
+
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 { // reverse a slice, pasted from stackoverflow lol
+		s[i], s[j] = s[j], s[i]
+	}
+
+	return s
+}
+
+func pack(tree *SparseQuadtree, ptr NodePtr, output *PackedSparseQuadtree, scalePow int64) {
+	startPos := len(*output)
+	var bitMask uint8
+	for i := 0; i < 4; i++ {
+		if tree.nodes[ptr].Children[i] != -1 {
+			pack(tree, tree.nodes[ptr].Children[i], output, scalePow>>2)
+			bitMask |= 1 << i
+		}
+	}
+	endPos := len(*output)
+	*output = append(*output, PackedSparseQuadtreeEntry{
+		cumulativeQuantityOfDescendents: endPos - startPos,
+		grayscale: hitCntToHeat(tree.nodes[ptr].hits, scalePow),
+		childrenThatExist: bitMask,
+	})
+}
+
 type HybridNode struct {
 	miss                bool
 	inDense             bool
