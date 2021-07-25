@@ -1,3 +1,7 @@
+/*
+ * Copyright (C) 2021 Nerds Inc and/or its affiliates. All rights reserved.
+ */
+
 package main
 
 import (
